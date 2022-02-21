@@ -1,0 +1,544 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=2">
+<meta name="theme-color" content="#222">
+<meta name="generator" content="Hexo 5.4.1">
+  <link rel="apple-touch-icon" sizes="180x180" href="/images/apple-touch-icon-next.png">
+  <link rel="icon" type="image/png" sizes="32x32" href="/images/favicon-32x32-next.png">
+  <link rel="icon" type="image/png" sizes="16x16" href="/images/favicon-16x16-next.png">
+  <link rel="mask-icon" href="/images/logo.svg" color="#222">
+
+<link rel="stylesheet" href="/css/main.css">
+
+
+<link rel="stylesheet" href="/lib/font-awesome/css/all.min.css">
+
+<script id="hexo-configurations">
+    var NexT = window.NexT || {};
+    var CONFIG = {"hostname":"example.com","root":"/","scheme":"Gemini","version":"7.8.0","exturl":false,"sidebar":{"position":"left","display":"post","padding":18,"offset":12,"onmobile":false},"copycode":{"enable":false,"show_result":false,"style":null},"back2top":{"enable":true,"sidebar":false,"scrollpercent":false},"bookmark":{"enable":false,"color":"#222","save":"auto"},"fancybox":false,"mediumzoom":false,"lazyload":false,"pangu":false,"comments":{"style":"tabs","active":null,"storage":true,"lazyload":false,"nav":null},"algolia":{"hits":{"per_page":10},"labels":{"input_placeholder":"Search for Posts","hits_empty":"We didn't find any results for the search: ${query}","hits_stats":"${hits} results found in ${time} ms"}},"localsearch":{"enable":false,"trigger":"auto","top_n_per_article":1,"unescape":false,"preload":false},"motion":{"enable":true,"async":false,"transition":{"post_block":"fadeIn","post_header":"slideDownIn","post_body":"slideDownIn","coll_header":"slideLeftIn","sidebar":"slideUpIn"}}};
+  </script>
+
+  <meta name="description" content="@[TOC] 写在前面通过flask的web接口请求去下发celery定时任务,例如偶尔需要定期后台执行的任务，也可以在配置文件中写死相关的配置任务,例如定期刷新等操作 启动命令 celery -A application.celery worker -l INFO  存储建议前台手动ctrl+c或者supervisor用信号kill掉celery服务会导致重启服务后任务丢失,原因是用Redis,">
+<meta property="og:type" content="article">
+<meta property="og:title" content="Flask+Celery实现动态添加定时任务">
+<meta property="og:url" content="http://example.com/2022/02/21/Flask+Celery%E5%AE%9E%E7%8E%B0%E5%8A%A8%E6%80%81%E6%B7%BB%E5%8A%A0%E5%AE%9A%E6%97%B6%E4%BB%BB%E5%8A%A1/index.html">
+<meta property="og:site_name" content="阿皓的笔记">
+<meta property="og:description" content="@[TOC] 写在前面通过flask的web接口请求去下发celery定时任务,例如偶尔需要定期后台执行的任务，也可以在配置文件中写死相关的配置任务,例如定期刷新等操作 启动命令 celery -A application.celery worker -l INFO  存储建议前台手动ctrl+c或者supervisor用信号kill掉celery服务会导致重启服务后任务丢失,原因是用Redis,">
+<meta property="og:locale" content="zh_CN">
+<meta property="article:published_time" content="2022-02-21T01:41:29.360Z">
+<meta property="article:modified_time" content="2021-10-26T08:58:42.867Z">
+<meta property="article:author" content="Alex">
+<meta property="article:tag" content="flask">
+<meta property="article:tag" content="celery">
+<meta property="article:tag" content="task">
+<meta name="twitter:card" content="summary">
+
+<link rel="canonical" href="http://example.com/2022/02/21/Flask+Celery%E5%AE%9E%E7%8E%B0%E5%8A%A8%E6%80%81%E6%B7%BB%E5%8A%A0%E5%AE%9A%E6%97%B6%E4%BB%BB%E5%8A%A1/">
+
+
+<script id="page-configurations">
+  // https://hexo.io/docs/variables.html
+  CONFIG.page = {
+    sidebar: "",
+    isHome : false,
+    isPost : true,
+    lang   : 'zh-CN'
+  };
+</script>
+
+  <title>Flask+Celery实现动态添加定时任务 | 阿皓的笔记</title>
+  
+
+
+
+
+
+
+  <noscript>
+  <style>
+  .use-motion .brand,
+  .use-motion .menu-item,
+  .sidebar-inner,
+  .use-motion .post-block,
+  .use-motion .pagination,
+  .use-motion .comments,
+  .use-motion .post-header,
+  .use-motion .post-body,
+  .use-motion .collection-header { opacity: initial; }
+
+  .use-motion .site-title,
+  .use-motion .site-subtitle {
+    opacity: initial;
+    top: initial;
+  }
+
+  .use-motion .logo-line-before i { left: initial; }
+  .use-motion .logo-line-after i { right: initial; }
+  </style>
+</noscript>
+
+</head>
+
+<body itemscope itemtype="http://schema.org/WebPage">
+  <div class="container use-motion">
+    <div class="headband"></div>
+
+    <header class="header" itemscope itemtype="http://schema.org/WPHeader">
+      <div class="header-inner"><div class="site-brand-container">
+  <div class="site-nav-toggle">
+    <div class="toggle" aria-label="切换导航栏">
+      <span class="toggle-line toggle-line-first"></span>
+      <span class="toggle-line toggle-line-middle"></span>
+      <span class="toggle-line toggle-line-last"></span>
+    </div>
+  </div>
+
+  <div class="site-meta">
+
+    <a href="/" class="brand" rel="start">
+      <span class="logo-line-before"><i></i></span>
+      <h1 class="site-title">阿皓的笔记</h1>
+      <span class="logo-line-after"><i></i></span>
+    </a>
+      <p class="site-subtitle" itemprop="description">其实我什么都不会</p>
+  </div>
+
+  <div class="site-nav-right">
+    <div class="toggle popup-trigger">
+    </div>
+  </div>
+</div>
+
+
+
+
+<nav class="site-nav">
+  <ul id="menu" class="main-menu menu">
+        <li class="menu-item menu-item-home">
+
+    <a href="/" rel="section"><i class="fa fa-home fa-fw"></i>首页</a>
+
+  </li>
+        <li class="menu-item menu-item-tags">
+
+    <a href="/tags/" rel="section"><i class="fa fa-tags fa-fw"></i>标签</a>
+
+  </li>
+        <li class="menu-item menu-item-categories">
+
+    <a href="/categories/" rel="section"><i class="fa fa-th fa-fw"></i>分类</a>
+
+  </li>
+        <li class="menu-item menu-item-archives">
+
+    <a href="/archives/" rel="section"><i class="fa fa-archive fa-fw"></i>归档</a>
+
+  </li>
+  </ul>
+</nav>
+
+
+
+
+</div>
+    </header>
+
+    
+  <div class="back-to-top">
+    <i class="fa fa-arrow-up"></i>
+    <span>0%</span>
+  </div>
+
+
+    <main class="main">
+      <div class="main-inner">
+        <div class="content-wrap">
+          
+
+          <div class="content post posts-expand">
+            
+
+    
+  
+  
+  <article itemscope itemtype="http://schema.org/Article" class="post-block" lang="zh-CN">
+    <link itemprop="mainEntityOfPage" href="http://example.com/2022/02/21/Flask+Celery%E5%AE%9E%E7%8E%B0%E5%8A%A8%E6%80%81%E6%B7%BB%E5%8A%A0%E5%AE%9A%E6%97%B6%E4%BB%BB%E5%8A%A1/">
+
+    <span hidden itemprop="author" itemscope itemtype="http://schema.org/Person">
+      <meta itemprop="image" content="/images/avatars.png">
+      <meta itemprop="name" content="Alex">
+      <meta itemprop="description" content="阿皓的私人博客">
+    </span>
+
+    <span hidden itemprop="publisher" itemscope itemtype="http://schema.org/Organization">
+      <meta itemprop="name" content="阿皓的笔记">
+    </span>
+      <header class="post-header">
+        <h1 class="post-title" itemprop="name headline">
+          Flask+Celery实现动态添加定时任务
+        </h1>
+
+        <div class="post-meta">
+            <span class="post-meta-item">
+              <span class="post-meta-item-icon">
+                <i class="far fa-calendar"></i>
+              </span>
+              <span class="post-meta-item-text">发表于</span>
+
+              <time title="创建时间：2022-02-21 09:41:29" itemprop="dateCreated datePublished" datetime="2022-02-21T09:41:29+08:00">2022-02-21</time>
+            </span>
+              <span class="post-meta-item">
+                <span class="post-meta-item-icon">
+                  <i class="far fa-calendar-check"></i>
+                </span>
+                <span class="post-meta-item-text">更新于</span>
+                <time title="修改时间：2021-10-26 16:58:42" itemprop="dateModified" datetime="2021-10-26T16:58:42+08:00">2021-10-26</time>
+              </span>
+            <span class="post-meta-item">
+              <span class="post-meta-item-icon">
+                <i class="far fa-folder"></i>
+              </span>
+              <span class="post-meta-item-text">分类于</span>
+                <span itemprop="about" itemscope itemtype="http://schema.org/Thing">
+                  <a href="/categories/python/" itemprop="url" rel="index"><span itemprop="name">python</span></a>
+                </span>
+            </span>
+
+          
+            <span class="post-meta-item" title="阅读次数" id="busuanzi_container_page_pv" style="display: none;">
+              <span class="post-meta-item-icon">
+                <i class="fa fa-eye"></i>
+              </span>
+              <span class="post-meta-item-text">阅读次数：</span>
+              <span id="busuanzi_value_page_pv"></span>
+            </span>
+
+        </div>
+      </header>
+
+    
+    
+    
+    <div class="post-body" itemprop="articleBody">
+
+      
+        <p>@[TOC]</p>
+<h3 id="写在前面"><a href="#写在前面" class="headerlink" title="写在前面"></a>写在前面</h3><p>通过flask的web接口请求去下发celery定时任务,例如偶尔需要定期后台执行的任务，也可以在配置文件中写死相关的配置任务,例如定期刷新等操作</p>
+<h3 id="启动命令"><a href="#启动命令" class="headerlink" title="启动命令"></a>启动命令</h3><blockquote>
+<p>celery -A application.celery worker -l INFO</p>
+</blockquote>
+<h3 id="存储建议"><a href="#存储建议" class="headerlink" title="存储建议"></a>存储建议</h3><pre><code>前台手动ctrl+c或者supervisor用信号kill掉celery服务会导致重启服务后任务丢失,原因是用Redis,Celery会把发送的任务临时存储在内存中,如果我们用ctrl+c或者supervisor的kill信号干掉它,那么Celery会无法将内存中的任务信息存储到Redis中.
+
+建议使用RabbitMQ作为消息中间件,这样会实时保存任务信息
+</code></pre>
+<h3 id="常见问题"><a href="#常见问题" class="headerlink" title="常见问题"></a>常见问题</h3><h5 id="解决Unable-to-load-celery-application-The-module-bin-was-not-found"><a href="#解决Unable-to-load-celery-application-The-module-bin-was-not-found" class="headerlink" title="解决Unable to load celery application.The module bin was not found."></a>解决Unable to load celery application.The module bin was not found.</h5><pre><code>检查celery目录问题，一般pycharm会以项目文件夹为根目录,application.celery需要写为绝对路径
+</code></pre>
+<h5 id="解决not-enough-values-to-unpack-expected-3-got-0-问题"><a href="#解决not-enough-values-to-unpack-expected-3-got-0-问题" class="headerlink" title="解决not enough values to unpack (expected 3, got 0)问题"></a>解决not enough values to unpack (expected 3, got 0)问题</h5><pre><code>--pool=solo 单进程
+windows下4.X版本需要指定单进程，目前不支持多进程
+linux支持多进程
+-P eventlet -c 1000
+windows下支持eventlet线程池
+</code></pre>
+<h3 id="Celery指定定时任务"><a href="#Celery指定定时任务" class="headerlink" title="Celery指定定时任务"></a>Celery指定定时任务</h3><pre><code>Celery定时任务需要开启轮循,代表注册任务,读取定时任务的执行周期以及配置参数
+celery -A bin.celery beat
+Celery开启Worker,上面相当于流水线,这里就是工人,流水线开启后,需要开启工人(worker)去执行任务
+celery -A application.celery worker -l INFO
+</code></pre>
+<h5 id="目录结构总结"><a href="#目录结构总结" class="headerlink" title="目录结构总结"></a>目录结构总结</h5><pre><code>bin-
+    app-
+        flask路由文件夹
+        __init__.py
+        route.py
+    setting-
+        celery配置文件夹
+        __init__.py
+        config.py (celery基本配置)
+        MakeCelery.py (celery初始化类)
+    tasks-
+        异步任务目录
+        __init__.py
+        tasks.py (flask调用celery异步任务)
+    __init__.py (重要:初始化flask并读取config.py,通过MakeCelery.py加载celery需要的配置)
+    celeryWorker.py (celery服务主服务,用于单独加载配置并启动celery服务)
+</code></pre>
+<h3 id="主要代码"><a href="#主要代码" class="headerlink" title="主要代码"></a>主要代码</h3><h6 id="routeFunc-py"><a href="#routeFunc-py" class="headerlink" title="routeFunc.py"></a>routeFunc.py</h6><figure class="highlight python"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">#!/usr/bin/env python</span></span><br><span class="line"><span class="comment"># -*- coding: utf-8 -*-</span></span><br><span class="line"><span class="comment"># @Time    : 2020/8/24 13:58</span></span><br><span class="line"><span class="comment"># @Author  : YanMingHao</span></span><br><span class="line"><span class="comment"># @Site    : </span></span><br><span class="line"><span class="comment"># @File    : routeFunc.py</span></span><br><span class="line"><span class="comment"># @Software: PyCharm</span></span><br><span class="line"><span class="comment"># @notice  : 我写这段代码时,知道我在做什么的,只有老天和我.但是现在,只有老天知道我在做什么.</span></span><br><span class="line"></span><br><span class="line"><span class="keyword">from</span> <span class="built_in">bin</span> <span class="keyword">import</span> app,jsonify,request</span><br><span class="line"><span class="keyword">from</span> <span class="built_in">bin</span>.tasks.tasks <span class="keyword">import</span> add_together</span><br><span class="line"></span><br><span class="line"></span><br><span class="line"><span class="meta">@app.route(<span class="params"><span class="string">&#x27;/test1/&#x27;</span>,methods=[<span class="string">&#x27;POST&#x27;</span>,<span class="string">&#x27;GET&#x27;</span>]</span>)</span></span><br><span class="line"><span class="keyword">def</span> <span class="title function_">TestRequest</span>():</span><br><span class="line">    <span class="string">&quot;&quot;&quot;</span></span><br><span class="line"><span class="string">    测试请求</span></span><br><span class="line"><span class="string">    :return:</span></span><br><span class="line"><span class="string">    &quot;&quot;&quot;</span></span><br><span class="line">    data = request.get_json()</span><br><span class="line">    <span class="built_in">print</span>(data)</span><br><span class="line">    num1 = data.get(<span class="string">&#x27;num1&#x27;</span>)</span><br><span class="line">    num2 = data.get(<span class="string">&#x27;num2&#x27;</span>)</span><br><span class="line">    <span class="built_in">print</span>(num1,num2)</span><br><span class="line">    add_together.delay(<span class="built_in">int</span>(num1),<span class="built_in">int</span>(num2))</span><br><span class="line">    <span class="keyword">return</span> jsonify(&#123;<span class="string">&#x27;count&#x27;</span>: <span class="string">&#x27;任务下发成功&#x27;</span>&#125;)</span><br><span class="line"></span><br><span class="line"></span><br><span class="line"></span><br><span class="line"><span class="keyword">if</span> __name__ == <span class="string">&#x27;__main__&#x27;</span>:</span><br><span class="line">    app.debug = <span class="literal">True</span></span><br><span class="line">    app.run(host=<span class="string">&#x27;0.0.0.0&#x27;</span>,port=<span class="number">8888</span>)</span><br></pre></td></tr></table></figure>
+<h6 id="config-py"><a href="#config-py" class="headerlink" title="config.py"></a>config.py</h6><figure class="highlight python"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">#!/usr/bin/env python</span></span><br><span class="line"><span class="comment"># -*- coding: utf-8 -*-</span></span><br><span class="line"><span class="comment"># @Time    : 2020/8/15 10:00</span></span><br><span class="line"><span class="comment"># @Author  : YanMingHao</span></span><br><span class="line"><span class="comment"># @Site    : </span></span><br><span class="line"><span class="comment"># @File    : config.py</span></span><br><span class="line"><span class="comment"># @Software: PyCharm</span></span><br><span class="line"><span class="comment"># @notice  : 我写这段代码时,知道我在做什么的,只有老天和我.但是现在,只有老天知道我在做什么.</span></span><br><span class="line"></span><br><span class="line"></span><br><span class="line">CELERY_BROKER_URL = <span class="string">&#x27;redis://localhost:6379/0&#x27;</span></span><br><span class="line">CELERY_RESULT_BACKEND = <span class="string">&#x27;redis://localhost:6379/0&#x27;</span></span><br><span class="line">CELERY_IMPORTS = <span class="string">&quot;bin.tasks.tasks&quot;</span>  <span class="comment"># 注册任务</span></span><br><span class="line">CELERY_TASK_SERIALIZER = <span class="string">&quot;msgpack&quot;</span></span><br><span class="line">CELERY_RESULT_SERIALIZER = <span class="string">&quot;json&quot;</span></span><br><span class="line">CELERY_TASK_RESULT_EXPIRES = <span class="literal">None</span></span><br><span class="line">CELERY_ACCEPT_CONTENT = [<span class="string">&#x27;json&#x27;</span>, <span class="string">&#x27;msgpack&#x27;</span>]</span><br><span class="line">timezone = <span class="string">&#x27;Asia/Shanghai&#x27;</span></span><br><span class="line">enable_utc = <span class="literal">True</span></span><br></pre></td></tr></table></figure>
+<h6 id="MakeCelery-py"><a href="#MakeCelery-py" class="headerlink" title="MakeCelery.py"></a>MakeCelery.py</h6><figure class="highlight python"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br><span class="line">39</span><br><span class="line">40</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">#!/usr/bin/env python</span></span><br><span class="line"><span class="comment"># -*- coding: utf-8 -*-</span></span><br><span class="line"><span class="comment"># @Time    : 2020/8/15 10:03</span></span><br><span class="line"><span class="comment"># @Author  : YanMingHao</span></span><br><span class="line"><span class="comment"># @Site    : </span></span><br><span class="line"><span class="comment"># @File    : MakeCelery.py</span></span><br><span class="line"><span class="comment"># @Software: PyCharm</span></span><br><span class="line"><span class="comment"># @notice  : 我写这段代码时,知道我在做什么的,只有老天和我.但是现在,只有老天知道我在做什么.</span></span><br><span class="line"></span><br><span class="line"><span class="keyword">from</span> celery <span class="keyword">import</span> Celery</span><br><span class="line"></span><br><span class="line"></span><br><span class="line"><span class="keyword">def</span> <span class="title function_">makeCelery</span>(<span class="params">app</span>):</span><br><span class="line">    <span class="string">&quot;&quot;&quot;</span></span><br><span class="line"><span class="string">    * 实例化celery</span></span><br><span class="line"><span class="string">    :param app:</span></span><br><span class="line"><span class="string">    :return:</span></span><br><span class="line"><span class="string">    &quot;&quot;&quot;</span></span><br><span class="line">    celery = Celery(</span><br><span class="line">        app.import_name,</span><br><span class="line">        backend=app.config[<span class="string">&#x27;CELERY_RESULT_BACKEND&#x27;</span>],</span><br><span class="line">        broker=app.config[<span class="string">&#x27;CELERY_BROKER_URL&#x27;</span>]</span><br><span class="line">    )</span><br><span class="line">    celery.config_from_object(app.config)</span><br><span class="line"></span><br><span class="line">    <span class="keyword">class</span> <span class="title class_">ContextTask</span>(celery.Task):</span><br><span class="line">        <span class="keyword">def</span> <span class="title function_">__call__</span>(<span class="params">self, *args, **kwargs</span>):</span><br><span class="line">            <span class="string">&quot;&quot;&quot;</span></span><br><span class="line"><span class="string">            * 将类变为可调用对象</span></span><br><span class="line"><span class="string">            :param args:</span></span><br><span class="line"><span class="string">            :param kwargs:</span></span><br><span class="line"><span class="string">            :return:</span></span><br><span class="line"><span class="string">            &quot;&quot;&quot;</span></span><br><span class="line">            <span class="keyword">with</span> app.app_context():</span><br><span class="line">                <span class="string">&quot;&quot;&quot;</span></span><br><span class="line"><span class="string">                打开上下文</span></span><br><span class="line"><span class="string">                &quot;&quot;&quot;</span></span><br><span class="line">                <span class="keyword">return</span> self.run(*args, **kwargs)</span><br><span class="line">    celery.Task = ContextTask</span><br><span class="line">    <span class="keyword">return</span> celery</span><br></pre></td></tr></table></figure>
+<h6 id="tasks-py"><a href="#tasks-py" class="headerlink" title="tasks.py"></a>tasks.py</h6><figure class="highlight python"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">#!/usr/bin/env python</span></span><br><span class="line"><span class="comment"># -*- coding: utf-8 -*-</span></span><br><span class="line"><span class="comment"># @Time    : 2020/8/24 13:58</span></span><br><span class="line"><span class="comment"># @Author  : YanMingHao</span></span><br><span class="line"><span class="comment"># @Site    : </span></span><br><span class="line"><span class="comment"># @File    : tasks.py</span></span><br><span class="line"><span class="comment"># @Software: PyCharm</span></span><br><span class="line"><span class="comment"># @notice  : 我写这段代码时,知道我在做什么的,只有老天和我.但是现在,只有老天知道我在做什么.</span></span><br><span class="line"><span class="keyword">from</span> <span class="built_in">bin</span> <span class="keyword">import</span> celery</span><br><span class="line"><span class="keyword">import</span> logging</span><br><span class="line"><span class="keyword">from</span> src.universal.log <span class="keyword">import</span> record, logFile</span><br><span class="line"></span><br><span class="line"></span><br><span class="line"><span class="meta">@celery.task</span></span><br><span class="line"><span class="keyword">def</span> <span class="title function_">add_together</span>(<span class="params">a, b</span>):</span><br><span class="line">    LOGGER = record(filename=logFile(<span class="string">&#x27;add_together.py&#x27;</span>), level=logging.INFO)</span><br><span class="line">    count = a + b</span><br><span class="line">    LOGGER.info(<span class="string">f&quot;后台任务结果为:<span class="subst">&#123;count&#125;</span>&quot;</span>)</span><br><span class="line">    <span class="comment"># return a + b</span></span><br></pre></td></tr></table></figure>
+<h6 id="celeryWorker-py"><a href="#celeryWorker-py" class="headerlink" title="celeryWorker.py"></a>celeryWorker.py</h6><figure class="highlight python"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">#!/usr/bin/env python</span></span><br><span class="line"><span class="comment"># -*- coding: utf-8 -*-</span></span><br><span class="line"><span class="comment"># @Time    : 2020/8/15 10:35</span></span><br><span class="line"><span class="comment"># @Author  : YanMingHao</span></span><br><span class="line"><span class="comment"># @Site    : </span></span><br><span class="line"><span class="comment"># @File    : celeryWorker.py</span></span><br><span class="line"><span class="comment"># @Software: PyCharm</span></span><br><span class="line"><span class="comment"># @notice  : 我写这段代码时,知道我在做什么的,只有老天和我.但是现在,只有老天知道我在做什么.</span></span><br><span class="line"><span class="keyword">from</span> <span class="built_in">bin</span> <span class="keyword">import</span> celery</span><br><span class="line"></span><br><span class="line"></span><br><span class="line"><span class="keyword">if</span> __name__ == <span class="string">&#x27;__main__&#x27;</span>:</span><br><span class="line">    <span class="comment"># 什么都不用写,只是为了单独指定这个文件运行celery</span></span><br><span class="line">    <span class="keyword">pass</span></span><br></pre></td></tr></table></figure>
+<h6 id="重要-init-py"><a href="#重要-init-py" class="headerlink" title="(重要)init.py"></a>(重要)<strong>init</strong>.py</h6><figure class="highlight python"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment"># -*- coding: utf-8 -*-</span></span><br><span class="line"><span class="comment"># @Time    : 2020/8/17 15:13</span></span><br><span class="line"><span class="comment"># @Author  : YinBaidong</span></span><br><span class="line"><span class="comment"># @function:</span></span><br><span class="line"><span class="comment"># @motto   : Only Me and God know what it&#x27;s doing!</span></span><br><span class="line"></span><br><span class="line"><span class="keyword">from</span> flask <span class="keyword">import</span> Flask,request,jsonify</span><br><span class="line"><span class="keyword">from</span> <span class="built_in">bin</span>.setting.MakeCelery <span class="keyword">import</span> makeCelery</span><br><span class="line"><span class="keyword">from</span> <span class="built_in">bin</span>.setting.path <span class="keyword">import</span> pathFile</span><br><span class="line"><span class="keyword">from</span> <span class="built_in">bin</span>.setting <span class="keyword">import</span> config</span><br><span class="line"></span><br><span class="line">app = Flask(__name__) <span class="comment">#初始化flask</span></span><br><span class="line">app.config.from_object(config)　＃　读取配置文件</span><br><span class="line">celery = makeCelery(app)　＃　用makeCelery继承flask读取的配置</span><br></pre></td></tr></table></figure>
+
+
+    </div>
+
+    
+    
+    
+        
+
+<div>
+<ul class="post-copyright">
+  <li class="post-copyright-author">
+    <strong>本文作者： </strong>Alex
+  </li>
+  <li class="post-copyright-link">
+    <strong>本文链接：</strong>
+    <a href="http://example.com/2022/02/21/Flask+Celery%E5%AE%9E%E7%8E%B0%E5%8A%A8%E6%80%81%E6%B7%BB%E5%8A%A0%E5%AE%9A%E6%97%B6%E4%BB%BB%E5%8A%A1/" title="Flask+Celery实现动态添加定时任务">http://example.com/2022/02/21/Flask+Celery实现动态添加定时任务/</a>
+  </li>
+  <li class="post-copyright-license">
+    <strong>版权声明： </strong>本博客所有文章除特别声明外，均采用 <a href="https://creativecommons.org/licenses/by-nc-sa/4.0/" rel="noopener" target="_blank"><i class="fab fa-fw fa-creative-commons"></i>BY-NC-SA</a> 许可协议。转载请注明出处！
+  </li>
+</ul>
+</div>
+
+
+      <footer class="post-footer">
+          <div class="post-tags">
+              <a href="/tags/flask/" rel="tag"># flask</a>
+              <a href="/tags/celery/" rel="tag"># celery</a>
+              <a href="/tags/task/" rel="tag"># task</a>
+          </div>
+
+        
+
+
+        
+    <div class="post-nav">
+      <div class="post-nav-item">
+    <a href="/2022/02/21/Docker%E6%89%93%E5%8C%85Python%E4%BB%A3%E7%A0%81%E6%9C%8D%E5%8A%A1%E7%9A%84%E4%B8%80%E7%A7%8D%E6%96%B9%E5%BC%8F/" rel="prev" title="Docker打包Python代码服务的一种方式">
+      <i class="fa fa-chevron-left"></i> Docker打包Python代码服务的一种方式
+    </a></div>
+      <div class="post-nav-item">
+    <a href="/2022/02/21/Hugegraph%E9%85%8D%E7%BD%AE%E6%96%87%E6%A1%A3/" rel="next" title="Hugegraph配置文档">
+      Hugegraph配置文档 <i class="fa fa-chevron-right"></i>
+    </a></div>
+    </div>
+      </footer>
+    
+  </article>
+  
+  
+  
+
+
+
+          </div>
+          
+
+<script>
+  window.addEventListener('tabs:register', () => {
+    let { activeClass } = CONFIG.comments;
+    if (CONFIG.comments.storage) {
+      activeClass = localStorage.getItem('comments_active') || activeClass;
+    }
+    if (activeClass) {
+      let activeTab = document.querySelector(`a[href="#comment-${activeClass}"]`);
+      if (activeTab) {
+        activeTab.click();
+      }
+    }
+  });
+  if (CONFIG.comments.storage) {
+    window.addEventListener('tabs:click', event => {
+      if (!event.target.matches('.tabs-comment .tab-content .tab-pane')) return;
+      let commentClass = event.target.classList[1];
+      localStorage.setItem('comments_active', commentClass);
+    });
+  }
+</script>
+
+        </div>
+          
+  
+  <div class="toggle sidebar-toggle">
+    <span class="toggle-line toggle-line-first"></span>
+    <span class="toggle-line toggle-line-middle"></span>
+    <span class="toggle-line toggle-line-last"></span>
+  </div>
+
+  <aside class="sidebar">
+    <div class="sidebar-inner">
+
+      <ul class="sidebar-nav motion-element">
+        <li class="sidebar-nav-toc">
+          文章目录
+        </li>
+        <li class="sidebar-nav-overview">
+          站点概览
+        </li>
+      </ul>
+
+      <!--noindex-->
+      <div class="post-toc-wrap sidebar-panel">
+          <div class="post-toc motion-element"><ol class="nav"><li class="nav-item nav-level-3"><a class="nav-link" href="#%E5%86%99%E5%9C%A8%E5%89%8D%E9%9D%A2"><span class="nav-number">1.</span> <span class="nav-text">写在前面</span></a></li><li class="nav-item nav-level-3"><a class="nav-link" href="#%E5%90%AF%E5%8A%A8%E5%91%BD%E4%BB%A4"><span class="nav-number">2.</span> <span class="nav-text">启动命令</span></a></li><li class="nav-item nav-level-3"><a class="nav-link" href="#%E5%AD%98%E5%82%A8%E5%BB%BA%E8%AE%AE"><span class="nav-number">3.</span> <span class="nav-text">存储建议</span></a></li><li class="nav-item nav-level-3"><a class="nav-link" href="#%E5%B8%B8%E8%A7%81%E9%97%AE%E9%A2%98"><span class="nav-number">4.</span> <span class="nav-text">常见问题</span></a><ol class="nav-child"><li class="nav-item nav-level-5"><a class="nav-link" href="#%E8%A7%A3%E5%86%B3Unable-to-load-celery-application-The-module-bin-was-not-found"><span class="nav-number">4.0.1.</span> <span class="nav-text">解决Unable to load celery application.The module bin was not found.</span></a></li><li class="nav-item nav-level-5"><a class="nav-link" href="#%E8%A7%A3%E5%86%B3not-enough-values-to-unpack-expected-3-got-0-%E9%97%AE%E9%A2%98"><span class="nav-number">4.0.2.</span> <span class="nav-text">解决not enough values to unpack (expected 3, got 0)问题</span></a></li></ol></li></ol></li><li class="nav-item nav-level-3"><a class="nav-link" href="#Celery%E6%8C%87%E5%AE%9A%E5%AE%9A%E6%97%B6%E4%BB%BB%E5%8A%A1"><span class="nav-number">5.</span> <span class="nav-text">Celery指定定时任务</span></a><ol class="nav-child"><li class="nav-item nav-level-5"><a class="nav-link" href="#%E7%9B%AE%E5%BD%95%E7%BB%93%E6%9E%84%E6%80%BB%E7%BB%93"><span class="nav-number">5.0.1.</span> <span class="nav-text">目录结构总结</span></a></li></ol></li></ol></li><li class="nav-item nav-level-3"><a class="nav-link" href="#%E4%B8%BB%E8%A6%81%E4%BB%A3%E7%A0%81"><span class="nav-number">6.</span> <span class="nav-text">主要代码</span></a><ol class="nav-child"><li class="nav-item nav-level-6"><a class="nav-link" href="#routeFunc-py"><span class="nav-number">6.0.0.1.</span> <span class="nav-text">routeFunc.py</span></a></li><li class="nav-item nav-level-6"><a class="nav-link" href="#config-py"><span class="nav-number">6.0.0.2.</span> <span class="nav-text">config.py</span></a></li><li class="nav-item nav-level-6"><a class="nav-link" href="#MakeCelery-py"><span class="nav-number">6.0.0.3.</span> <span class="nav-text">MakeCelery.py</span></a></li><li class="nav-item nav-level-6"><a class="nav-link" href="#tasks-py"><span class="nav-number">6.0.0.4.</span> <span class="nav-text">tasks.py</span></a></li><li class="nav-item nav-level-6"><a class="nav-link" href="#celeryWorker-py"><span class="nav-number">6.0.0.5.</span> <span class="nav-text">celeryWorker.py</span></a></li><li class="nav-item nav-level-6"><a class="nav-link" href="#%E9%87%8D%E8%A6%81-init-py"><span class="nav-number">6.0.0.6.</span> <span class="nav-text">(重要)init.py</span></a></li></ol></li></ol></li></ol></li></ol></div>
+      </div>
+      <!--/noindex-->
+
+      <div class="site-overview-wrap sidebar-panel">
+        <div class="site-author motion-element" itemprop="author" itemscope itemtype="http://schema.org/Person">
+    <img class="site-author-image" itemprop="image" alt="Alex"
+      src="/images/avatars.png">
+  <p class="site-author-name" itemprop="name">Alex</p>
+  <div class="site-description" itemprop="description">阿皓的私人博客</div>
+</div>
+<div class="site-state-wrap motion-element">
+  <nav class="site-state">
+      <div class="site-state-item site-state-posts">
+          <a href="/archives/">
+        
+          <span class="site-state-item-count">19</span>
+          <span class="site-state-item-name">日志</span>
+        </a>
+      </div>
+      <div class="site-state-item site-state-categories">
+            <a href="/categories/">
+          
+        <span class="site-state-item-count">6</span>
+        <span class="site-state-item-name">分类</span></a>
+      </div>
+      <div class="site-state-item site-state-tags">
+            <a href="/tags/">
+          
+        <span class="site-state-item-count">17</span>
+        <span class="site-state-item-name">标签</span></a>
+      </div>
+  </nav>
+</div>
+  <div class="cc-license motion-element" itemprop="license">
+    <a href="https://creativecommons.org/licenses/by-nc-sa/4.0/" class="cc-opacity" rel="noopener" target="_blank"><img src="/images/cc-by-nc-sa.svg" alt="Creative Commons"></a>
+  </div>
+
+
+
+      </div>
+
+    </div>
+  </aside>
+  <div id="sidebar-dimmer"></div>
+
+
+      </div>
+    </main>
+
+    <footer class="footer">
+      <div class="footer-inner">
+        
+
+        
+
+<div class="copyright">
+  
+  &copy; 
+  <span itemprop="copyrightYear">2022</span>
+  <span class="with-love">
+    <i class="fa fa-heart"></i>
+  </span>
+  <span class="author" itemprop="copyrightHolder">Alex</span>
+</div>
+  <div class="powered-by">由 <a href="https://hexo.io/" class="theme-link" rel="noopener" target="_blank">Hexo</a> & <a href="https://theme-next.org/" class="theme-link" rel="noopener" target="_blank">NexT.Gemini</a> 强力驱动
+  </div>
+
+    <script async src="//dn-lbstatics.qbox.me/busuanzi/2.3/busuanzi.pure.mini.js"></script>
+
+    <span id="busuanzi_container_site_pv">总访问量<span id="busuanzi_value_site_pv"></span>次</span>
+    <span class="post-meta-divider">|</span>
+    <span id="busuanzi_container_site_uv">总访客数<span id="busuanzi_value_site_uv"></span>人</span>
+    <span class="post-meta-divider">|</span>
+<!-- 不蒜子计数初始值纠正 -->
+<script>
+$(document).ready(function() {
+
+    var int = setInterval(fixCount, 50);  // 50ms周期检测函数
+    var countOffset = 0;  // 初始化首次数据
+
+    function fixCount() {            
+       if (document.getElementById("busuanzi_container_site_pv").style.display != "none")
+        {
+            $("#busuanzi_value_site_pv").html(parseInt($("#busuanzi_value_site_pv").html()) + countOffset); 
+            clearInterval(int);
+        }                  
+        if ($("#busuanzi_container_site_pv").css("display") != "none")
+        {
+            $("#busuanzi_value_site_uv").html(parseInt($("#busuanzi_value_site_uv").html()) + countOffset); // 加上初始数据 
+            clearInterval(int); // 停止检测
+        }  
+    }
+        
+});
+</script> 
+
+        
+<div class="busuanzi-count">
+  <script async src="https://busuanzi.ibruce.info/busuanzi/2.3/busuanzi.pure.mini.js"></script>
+    <span class="post-meta-item" id="busuanzi_container_site_uv" style="display: none;">
+      <span class="post-meta-item-icon">
+        <i class="fa fa-user"></i>
+      </span>
+      <span class="site-uv" title="总访客量">
+        <span id="busuanzi_value_site_uv"></span>
+      </span>
+    </span>
+    <span class="post-meta-divider">|</span>
+    <span class="post-meta-item" id="busuanzi_container_site_pv" style="display: none;">
+      <span class="post-meta-item-icon">
+        <i class="fa fa-eye"></i>
+      </span>
+      <span class="site-pv" title="总访问量">
+        <span id="busuanzi_value_site_pv"></span>
+      </span>
+    </span>
+</div>
+
+
+
+
+
+
+
+
+      </div>
+    </footer>
+  </div>
+
+  
+  <script src="/lib/anime.min.js"></script>
+  <script src="/lib/velocity/velocity.min.js"></script>
+  <script src="/lib/velocity/velocity.ui.min.js"></script>
+
+<script src="/js/utils.js"></script>
+
+<script src="/js/motion.js"></script>
+
+
+<script src="/js/schemes/pisces.js"></script>
+
+
+<script src="/js/next-boot.js"></script>
+
+
+
+
+  
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+  
+
+  
+
+</body>
+</html>
